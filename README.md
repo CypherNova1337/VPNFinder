@@ -104,8 +104,8 @@ The tool runs fully without `nmap`/`ffuf`; they only add depth when present.
 ## 🚀 Setup
 
 ```bash
-git clone https://github.com/cyphernova1337/VPN_Finder.git
-cd VPN_Finder
+git clone https://github.com/CypherNova1337/VPNFinder.git
+cd VPNFinder
 pip install -r requirements.txt
 chmod +x vpn-finder.py
 ```
