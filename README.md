@@ -1,210 +1,143 @@
-# VPN Finder
+# VPNFinder
 
-<pre>
- __     ______  _   _   _____ _           _
- \ \   / /  _ \| \ | | |  ___(_)_ __   __| | ___ _ __
-  \ \ / /| |_) |  \| | | |_  | | '_ \ / _` |/ _ \ '__|
-   \ V / |  __/| |\  | |  _| | | | | | (_| |  __/ |
-    \_/  |_|   |_| \_| |_|   |_|_| |_|\__,_|\___|_|
-</pre>
+Finds an organisation's remote-access gateways and identifies exactly what they're running.
 
-**Version:** 2.1
-**Created by:** Cyphernova1337, VoidSec-Hub
+![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+![python](https://img.shields.io/badge/python-3.8%2B-3776AB?style=flat-square)
 
-VPN Finder discovers **and fingerprints** the VPN / remote-access gateways
-exposed by a target organisation. It doesn't just guess "this might be a VPN"
-— it identifies the actual product (FortiGate, GlobalProtect, Cisco ASA,
-Pulse/Ivanti, Citrix, SonicWall, F5 APM, and more), assigns a confidence
-score with the evidence behind it, and flags the known CVEs relevant to each
-product so you know where to look next.
+## What it does
 
-**When the target hides behind a CDN/WAF (Cloudflare, CloudFront, Akamai,
-Fastly, Imperva, Sucuri, …), VPN Finder works to recover the real origin IP
-address** — through non-proxied subdomain leaks, historical/passive DNS, mail
-(MX/SPF) infrastructure, TLS-certificate and favicon pivoting, and direct
-origin verification — so the edge IP is never the end of the trail.
+Every organisation with remote workers has a way in — a FortiGate, a
+GlobalProtect portal, a Cisco ASA, a Citrix gateway, a Pulse/Ivanti box. These
+are the front door to the internal network, and they have a long history of
+serious, actively exploited vulnerabilities.
 
-## 📜 Why this tool
+Finding them is the easy half. The hard half is knowing *which product* you're
+looking at, because that determines whether the CVE you're thinking of applies.
+A login page that says nothing and a generic certificate can be any of a dozen
+appliances, and guessing wrong wastes the engagement.
 
-Most subdomain tools stop at "here's a list of hosts." VPN Finder is built for
-the specific job of locating remote-access infrastructure and telling you
-*exactly what it is*:
+VPNFinder does both. It sweeps the target's hosts for remote-access services,
+then fingerprints each one to name the actual product, with a confidence score
+and the evidence behind it. It maps what it identifies to the CVEs relevant to
+that product, so the output is a prioritised list rather than a pile of
+addresses.
 
-* **Product identification, not keyword guessing.** A dedicated fingerprint
-  engine matches TLS certificates, login-portal paths, response bodies,
-  headers, cookies, and titles against a database of real VPN appliances.
-* **Confidence scoring.** Every host gets a `0–100` score derived from
-  multiple corroborating signals and a verdict: `CONFIRMED`, `LIKELY`,
-  `POSSIBLE`, or none.
-* **CVE context.** When a product is identified, the tool lists the notable
-  CVEs for that product line (e.g. FortiOS `CVE-2024-21762`, Citrix Bleed
-  `CVE-2023-4966`, Ivanti `CVE-2024-21887`) so you can prioritise. *Always
-  verify the actual running version — these are pointers, not confirmations.*
-* **CDN-bypass origin discovery.** Detects the fronting CDN/WAF and then hunts
-  the true origin IP behind it by every passive/active means, verifying each
-  candidate by a direct SNI + Host-header request and TLS/content match.
-* **No hard external dependencies.** Subdomain brute-forcing, port scanning,
-  and even DNS (a built-in resolver with UDP → TCP → DNS-over-HTTPS fallback)
-  are implemented natively in Python — `ffuf` and `nmap` are **optional**
-  enrichment, not requirements.
-* **Broad passive enumeration.** Pulls subdomains from multiple free, key-less
-  sources concurrently (crt.sh, CertSpotter, HackerTarget, RapidDNS,
-  AlienVault OTX, Anubis, Wayback) and keeps going if any source is down.
-* **Machine-readable output.** Colorized terminal report plus `--output`
-  JSON and CSV for pipelines and reporting.
+When the target is behind a CDN or WAF, it also works to recover the real origin
+address, because the gateway is frequently reachable directly even when the
+website in front of it isn't.
 
----
+## Why you'd use it
 
-## ⚠️ Disclaimer
+- **Names the product**, rather than reporting "something VPN-shaped here."
+- **Scores with evidence**, so you can see why it reached a conclusion.
+- **Flags relevant CVEs** for the product it identified.
+- **Sees past a CDN** to the origin where the gateway usually lives.
+- **Hands off to nmap and ffuf** when you want to go deeper on what it found.
 
-**For authorized security testing and bug-bounty engagements ONLY.**
-
-* Always obtain explicit, written permission before scanning any target.
-* Unauthorized scanning is illegal and unethical.
-* The authors accept no liability for misuse. Use responsibly.
-
----
-
-## ✨ What it does
-
-| Stage | Description |
-|-------|-------------|
-| **Passive enumeration** | Concurrent lookups across 7 free public sources; fully key-less. |
-| **Active DNS brute-force** | Native async-style resolver over a VPN-focused wordlist (no `ffuf` needed). |
-| **Resolution** | Resolves every candidate to IPv4/IPv6, with reverse DNS. |
-| **Port scan** | Native threaded TCP connect scan of common VPN ports; strong-signal ports (IKE, OpenVPN, WireGuard, etc.) weighted higher. |
-| **Fingerprinting** | TLS certificate inspection + HTTP login-portal probing matched against the product database. |
-| **CDN detection** | Identifies the fronting CDN/WAF via CNAME chains, headers, and ASN. |
-| **Origin discovery** | Recovers the real IP behind the CDN and verifies it directly (see below). |
-| **Scoring & verdict** | Combines all signals into a confidence score and a human-readable verdict. |
-| **Reporting** | Colorized terminal output, ranked findings, JSON + CSV export. |
-
-### Products fingerprinted
-
-Fortinet FortiGate · Palo Alto GlobalProtect · Cisco ASA/AnyConnect ·
-Ivanti Connect Secure / Pulse Secure · Citrix Gateway/NetScaler ·
-SonicWall SMA/NSA · F5 BIG-IP APM · Check Point Mobile Access ·
-Sophos · WatchGuard · Barracuda · OpenVPN Access Server · Array Networks ·
-Microsoft RD Web / RD Gateway.
-
----
-
-## 🛠️ Prerequisites
-
-1. **Python 3.8+**
-2. Python packages (see below): `requests` (required), `cryptography` (recommended — enables full TLS certificate parsing including SANs and issuer).
-3. **Optional** external tools for extra enrichment:
-   * `nmap` — pass `--nmap` for service/version banners on open ports.
-   * `ffuf` — pass `--ffuf` for additional HTTP subdomain fuzzing.
-
-The tool runs fully without `nmap`/`ffuf`; they only add depth when present.
-
----
-
-## 🚀 Setup
+## Install
 
 ```bash
-git clone https://github.com/CypherNova1337/VPNFinder.git
+git clone https://github.com/CypherNova1337/VPNFinder
 cd VPNFinder
 pip install -r requirements.txt
 chmod +x vpn-finder.py
 ```
 
----
+Needs Python 3.8 or newer. `nmap` and `ffuf` are optional and only used with
+their flags.
 
-## ⚙️ Usage
+## Usage
 
 ```bash
-# Basic — full discovery + fingerprinting
-python3 vpn-finder.py company.com
-
-# Thorough — fingerprint every resolved host, not just VPN-named ones,
-# enrich with nmap, and export reports
-python3 vpn-finder.py company.com --all --nmap -o results/company
-
-# Fast passive-only pass (no brute-force, no port scan)
-python3 vpn-finder.py company.com --skip-brute --skip-ports
-
-# Custom wordlist and higher concurrency
-python3 vpn-finder.py company.com -w my_vpn_words.txt -t 80
+python3 vpn-finder.py example.com
 ```
 
-### Options
+Discovers candidate hosts, fingerprints what answers, and reports what it found
+with confidence and CVEs.
 
-| Flag | Description |
-|------|-------------|
-| `-w, --wordlist` | Custom subdomain wordlist for DNS brute-force. |
-| `-t, --threads` | Concurrency for resolution/scanning (default: 40). |
-| `--timeout` | Per-connection timeout in seconds (default: 6). |
-| `--all` | Fingerprint every resolved host, not just VPN-named candidates. |
-| `--skip-passive` | Skip passive subdomain enumeration. |
-| `--skip-brute` | Skip active DNS brute-force. |
-| `--skip-ports` | Skip TCP port scanning (fingerprint over 443 only). |
-| `--nmap` | Enrich open ports with `nmap -sV` (if installed). |
-| `--ffuf` | Also run `ffuf` HTTP fuzzing (if installed). |
-| `--ffuf-options` | Extra options passed through to `ffuf`. |
-| `--no-origin` | Disable origin-IP discovery for CDN-fronted hosts. |
-| `--force-origin` | Hunt for an origin IP even when no CDN is detected. |
-| `--asn-sweep` | Sweep the ASN/netblock around confirmed origins (heavier). |
-| `--sweep-cap` | Max IPs to sweep from a single CIDR (default: 1024). |
-| `-o, --output` | Base path for output files (`.json`, `.csv`, `.origins.csv`). |
-| `--min-confidence` | Only report hosts at/above this score (default: 20). |
-| `--no-color` | Disable coloured output (also honours `NO_COLOR`). |
+**Save the output**
 
----
-
-## 🕵️ CDN-bypass: finding the real origin IP
-
-When a host is fronted by a CDN/WAF, its resolved IP is just the edge. VPN
-Finder automatically detects this (via CNAME chains, response headers, and
-Team Cymru ASN mapping) and launches an origin hunt that gathers candidate IPs
-from every angle, then **verifies** each one by connecting directly to it with
-the target's SNI and `Host:` header and comparing the TLS certificate and page
-content to the real site:
-
-| Technique | What it exploits |
-|-----------|------------------|
-| Non-proxied subdomains | `mail.`, `dev.`, `direct.`, `origin.`, `cpanel.` etc. often point at the origin, outside the CDN. |
-| Historical / passive DNS | A-records that predate the CDN (AlienVault OTX, HackerTarget, SecurityTrails). |
-| Mail infrastructure | MX hosts and SPF `ip4:` blocks usually live on the origin network. |
-| TLS-certificate pivoting | Find IPs serving the same certificate (Censys / Shodan). |
-| Favicon pivoting | Shodan-compatible murmur3 favicon hash to find matching hosts. |
-| ASN / netblock sweep | `--asn-sweep` verifies neighbours in the origin's CIDR. |
-
-A candidate is reported as a **CONFIRMED ORIGIN** when its certificate or served
-page matches the target — that's the real IP behind the CDN.
-
-### Optional API keys (set as environment variables)
-
-The keyless techniques work out of the box. Setting any of these unlocks
-additional pivoting sources:
-
-* `SHODAN_API_KEY` — certificate/hostname and favicon-hash pivoting.
-* `CENSYS_API_ID` + `CENSYS_API_SECRET` — certificate-name host search.
-* `SECURITYTRAILS_API_KEY` — historical DNS A-records.
-
----
-
-## 📊 Example output
-
+```bash
+python3 vpn-finder.py example.com -o results.json
 ```
-=== sslvpn.company.com ===  [CONFIRMED VPN | 100/100]
-  IPs           : 203.0.113.10
-  Network       : AS64500 Example Telecom (203.0.113.0/24 US)
-  Product       : Fortinet FortiGate SSL-VPN (Fortinet)
-  Open TCP ports: 443, 10443
-  TLS cert CN   : FGT60F-support
-  Evidence      :
-    - TLS cert matches /FortiGate/
-    - body matches //remote/fgt_lang/ (HTTP 200)
-    - cookie matches /SVPNCOOKIE/
-  Known CVEs for this product (verify version!):
-    ! CVE-2018-13379 (pre-auth arbitrary file read)
-    ! CVE-2024-21762 (pre-auth RCE)
 
-## 🌍 Environment variables
+**Only high-confidence results**
 
-* `NO_COLOR` — disable colorized output.
-* `TMPDIR` — location for temporary files (defaults to `/tmp`).
-* `SHODAN_API_KEY`, `CENSYS_API_ID`, `CENSYS_API_SECRET`,
-  `SECURITYTRAILS_API_KEY` — optional origin-discovery pivots (see above).
+```bash
+python3 vpn-finder.py example.com --min-confidence 70
+```
+
+Useful on a large estate where low-confidence noise buries the real gateways.
+
+**Skip the noisy parts**
+
+```bash
+python3 vpn-finder.py example.com --skip-brute --skip-ports
+```
+
+Passive sources only — nothing that looks like scanning.
+
+**Widen the search across the org's netblocks**
+
+```bash
+python3 vpn-finder.py example.com --asn-sweep --sweep-cap 4096
+```
+
+**Go deeper on what it found**
+
+```bash
+python3 vpn-finder.py example.com --nmap --ffuf
+```
+
+**Use your own wordlist**
+
+```bash
+python3 vpn-finder.py example.com -w vpn_hostnames.txt -t 50
+```
+
+## Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `domain` | — | Target domain |
+| `-o` | — | Write results to a file |
+| `-w` | bundled | Custom hostname wordlist |
+| `-t` | — | Concurrent workers |
+| `--timeout` | — | Per-request timeout |
+| `--min-confidence` | — | Hide results scoring below this |
+| `--skip-passive` | off | Skip passive sources |
+| `--skip-brute` | off | Skip hostname brute force |
+| `--skip-ports` | off | Skip port scanning |
+| `--asn-sweep` | off | Sweep the organisation's netblocks |
+| `--sweep-cap` | — | Cap on addresses swept |
+| `--no-origin` | off | Don't attempt origin discovery |
+| `--force-origin` | off | Attempt origin discovery even without a CDN |
+| `--nmap` | off | Run nmap against identified hosts |
+| `--ffuf` | off | Run ffuf against identified hosts |
+| `--ffuf-options` | — | Extra options passed to ffuf |
+| `--all` | off | Report everything, including low confidence |
+| `--no-color` | off | Disable coloured output |
+| `--version` | — | Print version and exit |
+
+## Good to know
+
+- **A CVE match means the product is a candidate, not that it's vulnerable.**
+  Version detection on these appliances is imprecise and many are patched in
+  place. Confirm before reporting.
+- **`--asn-sweep` gets big fast.** An organisation's ASN can cover a lot of
+  address space. Keep `--sweep-cap` sensible.
+- **Gateways are monitored.** These are the hosts a security team watches most
+  closely, and brute forcing hostnames against them is very visible.
+- **Don't authenticate.** Identifying a portal is reconnaissance; trying
+  credentials against it is a different activity needing separate authorisation.
+
+## Authorised use
+
+Only against organisations you own or that are in scope for an engagement.
+Remote-access infrastructure is the most sensitive thing on a perimeter and
+probing it without permission will be treated as an attack.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
